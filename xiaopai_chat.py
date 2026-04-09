@@ -321,9 +321,13 @@ while True:
                             x_new = np.linspace(0, duration, target_length)
                             resampled_audio = np.interp(x_new, x_old, audio.samples)
                             
-                            sd.play(resampled_audio, target_sr)
+                            # 依照經驗，將語音音量放大 8 倍
+                            amplified_audio = resampled_audio * 8.0
+                            sd.play(amplified_audio, target_sr)
                         else:
-                            sd.play(audio.samples, audio.sample_rate)
+                            # 依照經驗，將語音音量放大 8 倍
+                            amplified_audio = np.array(audio.samples) * 8.0
+                            sd.play(amplified_audio, audio.sample_rate)
                             
                         sd.wait()
                 except Exception as e:
