@@ -308,10 +308,26 @@ while True:
                     audio = tts.generate(response_text)
                     if audio and len(audio.samples) > 0:
                         sd.default.device = None # 使用系統預設
-                        sd.play(audio.samples, audio.sample_rate)
+                        
+                        # 處理 Google VoiceHAT 音效卡取樣率限制 (強制重採樣至 48000Hz)
+                        original_sr = audio.sample_rate
+                        target_sr = 48000
+                        if original_sr != target_sr:
+                            # 使用 Numpy 進行簡單的線性插值重採樣，避免依賴 scipy
+                            duration = len(audio.samples) / original_sr
+                            target_length = int(duration * target_sr)
+                            
+                            x_old = np.linspace(0, duration, len(audio.samples))
+                            x_new = np.linspace(0, duration, target_length)
+                            resampled_audio = np.interp(x_new, x_old, audio.samples)
+                            
+                            sd.play(resampled_audio, target_sr)
+                        else:
+                            sd.play(audio.samples, audio.sample_rate)
+                            
                         sd.wait()
                 except Exception as e:
-                    print("播放語音失敗:", e)
+                    print("\n播放語音失敗:", e)
                     
         except urllib.error.HTTPError as e:
             error_msg = e.read().decode("utf-8")
