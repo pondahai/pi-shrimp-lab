@@ -38,3 +38,11 @@
 
 ---
 *筆記產生時間：2026年4月9日*
+
+## 5. 源碼分析與潛在問題 (Source Code Analysis)
+*   **啟動流程：** `start_xiaopai.sh` 負責清理舊行程、於背景啟動 `llama-server` 提供 API，並執行 Python 主程式 `xiaopai_chat.py`。
+*   **多模態輸入：** 結合了實體按鍵 (GPIO 22)、鍵盤輸入，並透過 `queue.Queue` 進行管理。短按清除記憶，長按錄音。語音轉文字使用 `faster_whisper`，並使用 `sherpa_onnx` 搭配自訂 Breeze 模型合成語音。
+*   **視覺整合：** 輸入「看」、「拍照」等關鍵字會觸發相機拍攝，透過 `rpicam-jpeg` 擷取影像轉換為 Base64 格式，提交至 Vision 模型。
+*   **已知問題 (待修復)：**
+    1.  `xiaopai_chat.py` 中解析 API Server-Sent Events (SSE) 的迴圈內，使用了變數 `first_token`，但未在迴圈前初始化，可能會觸發 `NameError`。
+    2.  視覺功能需依賴多模態投影檔 (mmproj)，但目前的 `start_xiaopai.sh` 啟動參數中未見 `--mmproj` 的設定，若觸發相機功能可能會收到 400 Bad Request。
