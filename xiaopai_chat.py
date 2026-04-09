@@ -308,7 +308,9 @@ while True:
             # 語音合成輸出
             if tts and response_text.strip():
                 try:
-                    audio = tts.generate(response_text)
+                    # 處理 OOV (Out Of Vocabulary) 問題，替換語音引擎不認識的英文或符號
+                    speak_text = response_text.replace("AI", "欸哀")
+                    audio = tts.generate(speak_text)
                     if audio and len(audio.samples) > 0:
                         sd.default.device = None # 使用系統預設
                         
