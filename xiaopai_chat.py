@@ -134,7 +134,8 @@ def start_recording():
     is_recording = True
     try:
         if rec_stream is None:
-            rec_stream = sd.InputStream(samplerate=16000, channels=1, callback=record_audio_callback)
+            # Google VoiceHAT 僅支援 48000Hz 錄音與播放
+            rec_stream = sd.InputStream(samplerate=48000, channels=1, callback=record_audio_callback)
             rec_stream.start()
     except Exception as e:
         print("開啟麥克風失敗:", e)
@@ -171,9 +172,11 @@ def button_released():
     if duration < 0.5:
         input_queue.put(("[CLEAR]", None))
     else:
-        if whisper_model and recording is not None and len(recording) > 16000 * 0.5:
+        # 錄音取樣率為 48000Hz，判斷長度是否大於 0.5 秒
+        if whisper_model and recording is not None and len(recording) > 48000 * 0.5:
             try:
-                sf.write("/tmp/temp_record.wav", recording, 16000)
+                sf.write("/tmp/temp_record.wav", recording, 48000)
+                # Whisper 會自動將讀取的音訊重採樣為其需要的 16000Hz
                 segments, _ = whisper_model.transcribe("/tmp/temp_record.wav", language="zh")
                 text = "".join([segment.text for segment in segments])
                 if text.strip():
