@@ -269,12 +269,12 @@ while True:
             "messages": messages,
             "stream": True,
             "temperature": 0.6,
-            "max_tokens": 100
+            "max_tokens": 1024
         }).encode("utf-8")
         
         req = urllib.request.Request("http://127.0.0.1:8080/v1/chat/completions", data=data, headers={"Content-Type": "application/json"})
         
-        print("小派: ", end="", flush=True)
+        print("小派: (思考中...)", end="", flush=True)
         response_text = ""
         first_token = True
         
@@ -287,12 +287,11 @@ while True:
                         if "choices" in chunk and len(chunk["choices"]) > 0:
                             delta = chunk["choices"][0].get("delta", {})
                             if "reasoning_content" in delta and delta["reasoning_content"] is not None:
-                                print(".", end="", flush=True)
+                                pass # 不印出點，避免畫面被塞滿
                             elif "content" in delta and delta["content"] is not None:
                                 content = delta["content"]
                                 if first_token:
-                                    print("\r小派:                ", end="\r", flush=True)
-                                    print("小派: ", end="", flush=True)
+                                    print("\r\033[K小派: ", end="", flush=True)
                                     first_token = False
                                 print(content, end="", flush=True)
                                 response_text += content
