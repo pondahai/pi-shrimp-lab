@@ -276,6 +276,7 @@ while True:
         
         print("小派: ", end="", flush=True)
         response_text = ""
+        first_token = True
         
         try:
             with urllib.request.urlopen(req) as response:
