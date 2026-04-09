@@ -286,10 +286,12 @@ while True:
                         chunk = json.loads(line[6:])
                         if "choices" in chunk and len(chunk["choices"]) > 0:
                             delta = chunk["choices"][0].get("delta", {})
-                            if "content" in delta and delta["content"] is not None:
+                            if "reasoning_content" in delta and delta["reasoning_content"] is not None:
+                                print(".", end="", flush=True)
+                            elif "content" in delta and delta["content"] is not None:
                                 content = delta["content"]
                                 if first_token:
-                                    print("小派:                ", end="\r", flush=True)
+                                    print("\r小派:                ", end="\r", flush=True)
                                     print("小派: ", end="", flush=True)
                                     first_token = False
                                 print(content, end="", flush=True)
