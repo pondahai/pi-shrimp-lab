@@ -151,14 +151,17 @@ def execute_shell_command(command):
     except Exception as e:
         return f"指令執行失敗: {e}"
 
-SYSTEM_PROMPT = """你是「小派」，一個運行在樹莓派 5 上的 AI 代理。你可以思考並使用工具。
-你【必須】且【只能】使用以下 JSON 格式回覆：
-{
-  "thought": "你的內心思考過程（為什麼需要使用工具，或者為什麼現在可以直接回答）",
-  "tool_name": "你要呼叫的工具名稱（若不需使用工具，請填 null 或空字串）",
-  "tool_args": "工具參數（若無則填空字串）",
-  "message": "你要說出的最終回答，字數需少於 30 字，口語化繁體中文（若你正在呼叫工具，請填空字串）"
-}
+SYSTEM_PROMPT = """你是「小派」，一個運行在樹莓派 5 上的 AI 代理。你可以思考、操作工具並與人溫暖地對話。
+
+### 互動規範：
+1. **工具呼叫 (內部任務)**：當你需要執行工具（如拍照、查時間、查系統）時，請【必須】輸出一個 JSON 物件，格式如下：
+   {
+     "thought": "你的思考過程",
+     "tool_name": "工具名稱",
+     "tool_args": "參數"
+   }
+
+2. **最終回答 (對人對話)**：當你已經取得所需的資訊，或者只是在跟我聊天時，請【不要使用 JSON】，直接以「自然、簡短、口語化」的繁體中文回答我（字數請控制在 50 字內）。
 
 可用的工具 (tool_name)：
 - "get_current_time": 獲取現在時間
@@ -325,8 +328,7 @@ while True:
                 "messages": messages,
                 "stream": False,
                 "temperature": 0.6,
-                "max_tokens": 1024,
-                "response_format": {"type": "json_object"}
+                "max_tokens": 1024
             }
             
             headers = {"Content-Type": "application/json"}
@@ -390,38 +392,42 @@ while True:
                     
                 response_text = res_body["choices"][0]["message"]["content"]
                 
-                # Filter out <thought>...</thought> tags to ensure valid JSON
+                # Filter out <thought>...</thought> tags
                 import re
                 thoughts = re.findall(r"<thought>(.*?)</thought>", response_text, flags=re.DOTALL)
                 if thoughts:
                     print(f"\n[大腦思考過程]: {thoughts[0].strip()}")
                 
                 clean_response = re.sub(r"<thought>.*?</thought>", "", response_text, flags=re.DOTALL).strip()
-                # Clean up markdown code blocks if present
-                if clean_response.startswith("```json"):
-                    clean_response = re.sub(r"^```json\s*", "", clean_response)
-                    clean_response = re.sub(r"\s*```$", "", clean_response)
+                
+                # 彈性解析：嘗試辨識 JSON 或 純文字
+                agent_response = {}
+                is_json = False
+                
+                # 嘗試清除 Markdown 標籤以尋找 JSON
+                potential_json = clean_response
+                if "```json" in potential_json:
+                    match = re.search(r"```json\s*(.*?)\s*```", potential_json, re.DOTALL)
+                    if match:
+                        potential_json = match.group(1)
                 
                 try:
-                    agent_response = json.loads(clean_response)
-                    # 如果回傳的是列表，取第一個元素
-                    if isinstance(agent_response, list) and len(agent_response) > 0:
-                        agent_response = agent_response[0]
-                    # 確保它現在是個字典，否則建立空字典
-                    if not isinstance(agent_response, dict):
-                        agent_response = {"message": str(agent_response), "tool_name": None}
-                except json.JSONDecodeError:
-                    # Fallback if not JSON
-                    agent_response = {"message": clean_response, "tool_name": None}
-                
-                thought = agent_response.get("thought", "")
-                tool_name = agent_response.get("tool_name", "")
-                tool_args = agent_response.get("tool_args", "")
-                message_text = agent_response.get("message", "")
-                
-                messages.append({"role": "assistant", "content": response_text})
-                
-                if tool_name and str(tool_name).strip() and str(tool_name).lower() != "null":
+                    parsed = json.loads(potential_json)
+                    if isinstance(parsed, list) and len(parsed) > 0:
+                        parsed = parsed[0]
+                    if isinstance(parsed, dict):
+                        agent_response = parsed
+                        is_json = True
+                except:
+                    is_json = False
+
+                if is_json and agent_response.get("tool_name"):
+                    # 如果是工具呼叫
+                    tool_name = agent_response.get("tool_name", "")
+                    tool_args = agent_response.get("tool_args", "")
+                    
+                    messages.append({"role": "assistant", "content": response_text})
+                    
                     print(f"\n[系統] 正在呼叫工具: {tool_name}({tool_args})")
                     oled.draw_screen(current_text=f"呼叫 {tool_name}...")
                     
@@ -451,9 +457,28 @@ while True:
                         messages.append({"role": "system", "content": f"工具 {tool_name} 的執行結果:\n{tool_result}"})
                     
                     continue
-                
-                # No tool call, process the message
-                if message_text:
+                else:
+                    # 如果是純文字回答 (或是 JSON 裡的 message 內容)
+                    if is_json and "message" in agent_response:
+                        message_text = agent_response["message"]
+                    elif is_json and not agent_response.get("tool_name"):
+                        # 如果是 JSON 但沒 tool_name，嘗試找其他可能的回答欄位
+                        message_text = None
+                        for fk in ["answer", "summary", "analysis", "content", "response"]:
+                            if fk in agent_response:
+                                message_text = str(agent_response[fk])
+                                break
+                        if not message_text:
+                            message_text = clean_response
+                    else:
+                        # 這是大腦回傳的自然語言
+                        message_text = clean_response
+                    
+                    if not str(message_text).strip():
+                        print(f"\n[系統] 模型未回傳有效文字。原始內容: {response_text}")
+                        break
+
+                    messages.append({"role": "assistant", "content": response_text})
                     print(f"\r\033[K小派: {message_text}", flush=True)
                     oled.draw_screen(current_text=message_text)
                     
@@ -481,9 +506,6 @@ while True:
                         except Exception as e:
                             print("\n播放語音失敗:", e)
                     break 
-                else:
-                    print(f"\n[系統] 模型未回傳有效訊息。原始回傳內容: {response_text}")
-                    break
                         
             except urllib.error.HTTPError as e:
                 error_msg = e.read().decode("utf-8")
