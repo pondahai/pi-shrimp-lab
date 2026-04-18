@@ -113,8 +113,52 @@ except Exception as e:
     print("OLED 初始化失敗:", e)
     sys.exit(1)
 
+import datetime
+import subprocess
+
+def get_current_time():
+    now = datetime.datetime.now()
+    return f"現在時間是：{now.strftime('%Y年%m月%d日 %H:%M:%S')}"
+
+def get_system_status():
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
+            temp = float(f.read().strip()) / 1000.0
+        # try to use free -m
+        result = subprocess.run(['free', '-m'], capture_output=True, text=True)
+        return f"CPU溫度: {temp:.1f}°C\n記憶體狀態:\n{result.stdout.strip()}"
+    except Exception as e:
+        return f"讀取系統狀態失敗: {e}"
+
+def execute_shell_command(command):
+    allowlist = ['ls', 'ping', 'df', 'uptime', 'free']
+    cmd_base = command.split()[0] if command else ""
+    if cmd_base not in allowlist:
+        return f"安全限制：不允許執行指令 '{cmd_base}'，只允許: {', '.join(allowlist)}"
+    try:
+        result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=5)
+        return result.stdout.strip()[:500] # 避免輸出過長
+    except Exception as e:
+        return f"指令執行失敗: {e}"
+
+SYSTEM_PROMPT = """你是「小派」，一個運行在樹莓派 5 上的 AI 代理。你可以思考並使用工具。
+你【必須】且【只能】使用以下 JSON 格式回覆：
+{
+  "thought": "你的內心思考過程（為什麼需要使用工具，或者為什麼現在可以直接回答）",
+  "tool_name": "你要呼叫的工具名稱（若不需使用工具，請填 null 或空字串）",
+  "tool_args": "工具參數（若無則填空字串）",
+  "message": "你要說出的最終回答，字數需少於 30 字，口語化繁體中文（若你正在呼叫工具，請填空字串）"
+}
+
+可用的工具 (tool_name)：
+- "get_current_time": 獲取現在時間
+- "get_system_status": 獲取 CPU 溫度與記憶體狀態
+- "capture_and_analyze_vision": 拍照並觀看眼前畫面
+- "execute_shell_command": 執行終端機安全指令 (參數 command 為指令字串)
+"""
+
 initial_messages = [
-    {"role": "system", "content": "你是「小派」，一個運行在樹莓派 5 上的AI語音助手，擁有視覺與聽覺。你的大腦是 Gemma 模型。你的回答要非常簡潔口語化，因為你要用 TTS 講出來，字數盡量少於 30 字。使用繁體中文。"}
+    {"role": "system", "content": SYSTEM_PROMPT}
 ]
 messages = list(initial_messages)
 
@@ -251,99 +295,174 @@ while True:
         if input_type == "voice":
             print(f"你 (語音): {user_input}")
             
-        # 判斷是否需要呼叫相機
-        if "看" in user_input or "拍照" in user_input or "這" in user_input:
-            base64_img = capture_image_base64()
-            if base64_img:
-                msg_content = [
-                    {"type": "text", "text": user_input},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_img}"}}
-                ]
-                messages.append({"role": "user", "content": msg_content})
-            else:
-                messages.append({"role": "user", "content": user_input})
-        else:
-            messages.append({"role": "user", "content": user_input})
-            
+        messages.append({"role": "user", "content": user_input})
         oled.history.append(("user", user_input))
         oled.draw_screen()
         
-        data = json.dumps({
-            "messages": messages,
-            "stream": True,
-            "temperature": 0.6,
-            "max_tokens": 1024
-        }).encode("utf-8")
-        
-        req = urllib.request.Request("http://127.0.0.1:8080/v1/chat/completions", data=data, headers={"Content-Type": "application/json"})
-        
-        print("小派: (思考中...)", end="", flush=True)
-        response_text = ""
-        first_token = True
-        
-        try:
-            with urllib.request.urlopen(req) as response:
-                for line in response:
-                    line = line.decode("utf-8").strip()
-                    if line.startswith("data: ") and line != "data: [DONE]":
-                        chunk = json.loads(line[6:])
-                        if "choices" in chunk and len(chunk["choices"]) > 0:
-                            delta = chunk["choices"][0].get("delta", {})
-                            if "reasoning_content" in delta and delta["reasoning_content"] is not None:
-                                pass # 不印出點，避免畫面被塞滿
-                            elif "content" in delta and delta["content"] is not None:
-                                content = delta["content"]
-                                if first_token:
-                                    print("\r\033[K小派: ", end="", flush=True)
-                                    first_token = False
-                                print(content, end="", flush=True)
-                                response_text += content
-                                if len(response_text) % 2 == 0:
-                                    oled.draw_screen(current_text=response_text)
+        # Agent Loop
+        agent_loop_count = 0
+        while agent_loop_count < 5:
+            agent_loop_count += 1
             
-            oled.draw_screen(current_text=response_text)
-            print()
-            messages.append({"role": "assistant", "content": response_text})
+            payload = {
+                "messages": messages,
+                "stream": False,
+                "temperature": 0.6,
+                "max_tokens": 1024,
+                "response_format": {"type": "json_object"}
+            }
             
-            # 語音合成輸出
-            if tts and response_text.strip():
-                try:
-                    # 處理 OOV (Out Of Vocabulary) 問題，替換語音引擎不認識的英文或符號
-                    speak_text = response_text.replace("AI", "欸哀")
-                    audio = tts.generate(speak_text)
-                    if audio and len(audio.samples) > 0:
-                        sd.default.device = None # 使用系統預設
+            headers = {"Content-Type": "application/json"}
+            if os.environ.get("USE_CLOUD_LLM") == "1":
+                api_url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+                headers["Authorization"] = "Bearer "
+                api_key = os.environ.get("GEMINI_API_KEY", "")
+                headers["x-goog-api-key"] = api_key
+                payload["model"] = "models/gemma-4-31b-it"
+            else:
+                api_url = "http://127.0.0.1:8080/v1/chat/completions"
+            
+            print("小派: (思考中...)", end="", flush=True)
+            oled.draw_screen(current_text="(思考中...)")
+            
+            try:
+                raw_response = ""
+                if os.environ.get("USE_CLOUD_LLM") == "1":
+                    import subprocess
+                    curl_cmd = [
+                        "curl", "-s", "-X", "POST",
+                        "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                        "-H", "Content-Type: application/json",
+                        "-H", "Authorization: Bearer ",
+                        "-H", "x-goog-api-key: " + api_key,
+                        "-d", json.dumps(payload)
+                    ]
+                    result = subprocess.run(curl_cmd, capture_output=True, text=True)
+                    raw_response = result.stdout
+                else:
+                    data = json.dumps(payload).encode("utf-8")
+                    req = urllib.request.Request(api_url, data=data, headers=headers)
+                    with urllib.request.urlopen(req, timeout=600) as response:
+                        raw_response = response.read().decode("utf-8")
                         
-                        # 處理 Google VoiceHAT 音效卡取樣率限制 (強制重採樣至 48000Hz)
-                        original_sr = audio.sample_rate
-                        target_sr = 48000
-                        if original_sr != target_sr:
-                            # 使用 Numpy 進行簡單的線性插值重採樣，避免依賴 scipy
-                            duration = len(audio.samples) / original_sr
-                            target_length = int(duration * target_sr)
-                            
-                            x_old = np.linspace(0, duration, len(audio.samples))
-                            x_new = np.linspace(0, duration, target_length)
-                            resampled_audio = np.interp(x_new, x_old, audio.samples)
-                            
-                            # 依照經驗，將語音音量放大 8 倍
-                            amplified_audio = resampled_audio * 8.0
-                            sd.play(amplified_audio, target_sr)
-                        else:
-                            # 依照經驗，將語音音量放大 8 倍
-                            amplified_audio = np.array(audio.samples) * 8.0
-                            sd.play(amplified_audio, audio.sample_rate)
-                            
-                        sd.wait()
-                except Exception as e:
-                    print("\n播放語音失敗:", e)
+                if not raw_response.strip():
+                    print("\n[系統] 錯誤: 大腦回傳了空白訊息。可能是模型崩潰或處理失敗。")
+                    break
+
+                res_body = json.loads(raw_response)
+                
+                # Check if there is an error in response
+                has_error = False
+                if isinstance(res_body, list) and len(res_body) > 0 and "error" in res_body[0]:
+                    has_error = True
+                    error_msg = res_body[0]["error"]["message"]
+                    code = res_body[0]["error"]["code"]
+                elif isinstance(res_body, dict) and "error" in res_body:
+                    has_error = True
+                    error_msg = res_body["error"]["message"]
+                    code = res_body["error"]["code"]
                     
-        except urllib.error.HTTPError as e:
-            error_msg = e.read().decode("utf-8")
-            print(f"\n[大腦回傳錯誤]: {e.code} - {error_msg}")
-            if "image" in error_msg.lower() or e.code == 400:
-                print("[系統提示] 模型可能尚未正確載入視覺投影檔 (mmproj)。")
-                messages.pop()
+                if has_error:
+                    print(f"\n[大腦回傳錯誤]: {code} - {error_msg}")
+                    break
+                    
+                response_text = res_body["choices"][0]["message"]["content"]
+                
+                # Filter out <thought>...</thought> tags to ensure valid JSON
+                import re
+                response_text = re.sub(r"<thought>.*?</thought>", "", response_text, flags=re.DOTALL).strip()
+                # Clean up markdown code blocks if present
+                if response_text.startswith("```json"):
+                    response_text = re.sub(r"^```json\s*", "", response_text)
+                    response_text = re.sub(r"\s*```$", "", response_text)
+                
+                try:
+                    agent_response = json.loads(response_text)
+                except json.JSONDecodeError:
+                    # Fallback if not JSON
+                    agent_response = {"message": response_text, "tool_name": None}
+                
+                thought = agent_response.get("thought", "")
+                tool_name = agent_response.get("tool_name", "")
+                tool_args = agent_response.get("tool_args", "")
+                message_text = agent_response.get("message", "")
+                
+                messages.append({"role": "assistant", "content": response_text})
+                
+                if tool_name and str(tool_name).strip() and str(tool_name).lower() != "null":
+                    print(f"\n[系統] 正在呼叫工具: {tool_name}({tool_args})")
+                    oled.draw_screen(current_text=f"呼叫 {tool_name}...")
+                    
+                    tool_result = ""
+                    if tool_name == "get_current_time":
+                        tool_result = get_current_time()
+                    elif tool_name == "get_system_status":
+                        tool_result = get_system_status()
+                    elif tool_name == "capture_and_analyze_vision":
+                        base64_img = capture_image_base64()
+                        if base64_img:
+                            tool_result = "已獲取照片，請分析畫面。"
+                            messages.append({"role": "user", "content": [
+                                {"type": "text", "text": tool_result},
+                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_img}"}}
+                            ]})
+                        else:
+                            tool_result = "拍照失敗。"
+                            messages.append({"role": "system", "content": tool_result})
+                    elif tool_name == "execute_shell_command":
+                        tool_result = execute_shell_command(tool_args)
+                    else:
+                        tool_result = f"找不到工具: {tool_name}"
+                        
+                    print(f"[系統] 工具結果:\n{tool_result}")
+                    if tool_name != "capture_and_analyze_vision":
+                        messages.append({"role": "system", "content": f"工具 {tool_name} 的執行結果:\n{tool_result}"})
+                    
+                    continue
+                
+                # No tool call, process the message
+                if message_text:
+                    print(f"\r\033[K小派: {message_text}", flush=True)
+                    oled.draw_screen(current_text=message_text)
+                    
+                    # 語音合成輸出
+                    if tts and str(message_text).strip():
+                        try:
+                            speak_text = str(message_text).replace("AI", "欸哀")
+                            audio = tts.generate(speak_text)
+                            if audio and len(audio.samples) > 0:
+                                sd.default.device = None
+                                original_sr = audio.sample_rate
+                                target_sr = 48000
+                                if original_sr != target_sr:
+                                    duration = len(audio.samples) / original_sr
+                                    target_length = int(duration * target_sr)
+                                    x_old = np.linspace(0, duration, len(audio.samples))
+                                    x_new = np.linspace(0, duration, target_length)
+                                    resampled_audio = np.interp(x_new, x_old, audio.samples)
+                                    amplified_audio = resampled_audio * 8.0
+                                    sd.play(amplified_audio, target_sr)
+                                else:
+                                    amplified_audio = np.array(audio.samples) * 8.0
+                                    sd.play(amplified_audio, audio.sample_rate)
+                                sd.wait()
+                        except Exception as e:
+                            print("\n播放語音失敗:", e)
+                    break 
+                else:
+                    print(f"\n[系統] 模型未回傳有效訊息。原始回傳內容: {response_text}")
+                    break
+                        
+            except urllib.error.HTTPError as e:
+                error_msg = e.read().decode("utf-8")
+                print(f"\n[大腦回傳錯誤]: {e.code} - {error_msg}")
+                if "image" in error_msg.lower() or e.code == 400:
+                    print("[系統提示] 模型可能尚未正確載入視覺投影檔 (mmproj)。")
+                    messages.pop()
+                break
+            except Exception as e:
+                print(f"\n[內部錯誤]: {e}")
+                break
         
     except KeyboardInterrupt:
         oled.show_message("小派休息囉！Zzz")
