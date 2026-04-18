@@ -10,7 +10,18 @@
 - **Hybrid LLM Engine (雙引擎切換)**：
     - **Cloud Mode**：網路通暢時，自動連接 Google Gemini API 使用強大的 `gemma-4-31b-it` 大模型。
     - **Local Mode**：網路斷線時，自動降級執行本地 `llama.cpp` (Gemma-4-E2B-it)。
+- **Text-Only Mode (純文字模式)**：可跳過語音引擎載入，極速啟動並節省記憶體。
 - **多模態視覺系統**：成功掛載 `mmproj-F16.gguf`，支援即時拍照、畫面分析與多輪對話。
+
+## 🚀 啟動指南
+### 標準語音模式
+```bash
+bash start_xiaopai.sh
+```
+### 純文字模式 (關閉語音 STT/TTS)
+```bash
+bash start_xiaopai.sh --text
+```
 - **內建工具箱 (Tools)**：
     - `get_current_time`: 精準時間查詢。
     - `get_system_status`: CPU 溫度、記憶體狀態監控。

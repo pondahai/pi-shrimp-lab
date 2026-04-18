@@ -17,33 +17,43 @@ from luma.core.interface.serial import i2c
 from luma.oled.device import ssd1306
 from gpiozero import Button
 
-# 載入語音引擎
-print("正在載入語音辨識模型 (Whisper)...")
-try:
-    from faster_whisper import WhisperModel
-    whisper_model = WhisperModel("tiny", device="cpu", compute_type="int8")
-except Exception as e:
-    print("載入 Whisper 失敗:", e)
-    whisper_model = None
+# 檢查是否為純文字模式
+TEXT_ONLY_MODE = os.environ.get("XIAOPAI_TEXT_ONLY") == "1"
+if TEXT_ONLY_MODE:
+    print("\n[DEBUG] 檢測到純文字模式環境變數：XIAOPAI_TEXT_ONLY=1")
 
-print("正在載入語音合成模型 (Sherpa-ONNX)...")
-try:
-    import sherpa_onnx
-    tts_config = sherpa_onnx.OfflineTtsConfig(
-        model=sherpa_onnx.OfflineTtsModelConfig(
-            vits=sherpa_onnx.OfflineTtsVitsModelConfig(
-                model="/home/pi/xiaopai4/model_files/breeze-custom/breeze2-vits.onnx",
-                lexicon="/home/pi/xiaopai4/model_files/breeze-custom/lexicon.txt",
-                tokens="/home/pi/xiaopai4/model_files/breeze-custom/tokens.txt",
-                noise_scale=0.333,
-                noise_scale_w=0.2,
-                length_scale=1.1
+# 載入語音引擎
+if not TEXT_ONLY_MODE:
+    print("正在載入語音辨識模型 (Whisper)...")
+    try:
+        from faster_whisper import WhisperModel
+        whisper_model = WhisperModel("tiny", device="cpu", compute_type="int8")
+    except Exception as e:
+        print("載入 Whisper 失敗:", e)
+        whisper_model = None
+
+    print("正在載入語音合成模型 (Sherpa-ONNX)...")
+    try:
+        import sherpa_onnx
+        tts_config = sherpa_onnx.OfflineTtsConfig(
+            model=sherpa_onnx.OfflineTtsModelConfig(
+                vits=sherpa_onnx.OfflineTtsVitsModelConfig(
+                    model="/home/pi/xiaopai4/model_files/breeze-custom/breeze2-vits.onnx",
+                    lexicon="/home/pi/xiaopai4/model_files/breeze-custom/lexicon.txt",
+                    tokens="/home/pi/xiaopai4/model_files/breeze-custom/tokens.txt",
+                    noise_scale=0.333,
+                    noise_scale_w=0.2,
+                    length_scale=1.1
+                )
             )
         )
-    )
-    tts = sherpa_onnx.OfflineTts(tts_config)
-except Exception as e:
-    print("載入 Sherpa-ONNX 失敗:", e)
+        tts = sherpa_onnx.OfflineTts(tts_config)
+    except Exception as e:
+        print("載入 Sherpa-ONNX 失敗:", e)
+        tts = None
+else:
+    print("📢 小派以【純文字模式】啟動 (已停用語音辨識與合成)")
+    whisper_model = None
     tts = None
 
 # --- OLED ---
@@ -202,17 +212,24 @@ def stop_recording():
 
 input_queue = queue.Queue()
 btn_press_time = 0
-
 def button_pressed():
     global btn_press_time
     btn_press_time = time.time()
-    start_recording()
+    if not TEXT_ONLY_MODE:
+        start_recording()
+    else:
+        print("\n[系統] 目前為純文字模式，語音錄音已停用。")
 
 def button_released():
     global btn_press_time
     duration = time.time() - btn_press_time
+
+    if TEXT_ONLY_MODE:
+        if duration < 0.5:
+            input_queue.put(("[CLEAR]", None))
+        return
+
     recording = stop_recording()
-    
     if duration < 0.5:
         input_queue.put(("[CLEAR]", None))
     else:
@@ -365,22 +382,37 @@ while True:
                 if has_error:
                     print(f"\n[大腦回傳錯誤]: {code} - {error_msg}")
                     break
+                
+                # 防禦性檢查：確保回傳內容存在 choices
+                if "choices" not in res_body or len(res_body["choices"]) == 0:
+                    print(f"\n[系統] 錯誤: API 回傳內容中找不到 choices。完整內容: {raw_response}")
+                    break
                     
                 response_text = res_body["choices"][0]["message"]["content"]
                 
                 # Filter out <thought>...</thought> tags to ensure valid JSON
                 import re
-                response_text = re.sub(r"<thought>.*?</thought>", "", response_text, flags=re.DOTALL).strip()
+                thoughts = re.findall(r"<thought>(.*?)</thought>", response_text, flags=re.DOTALL)
+                if thoughts:
+                    print(f"\n[大腦思考過程]: {thoughts[0].strip()}")
+                
+                clean_response = re.sub(r"<thought>.*?</thought>", "", response_text, flags=re.DOTALL).strip()
                 # Clean up markdown code blocks if present
-                if response_text.startswith("```json"):
-                    response_text = re.sub(r"^```json\s*", "", response_text)
-                    response_text = re.sub(r"\s*```$", "", response_text)
+                if clean_response.startswith("```json"):
+                    clean_response = re.sub(r"^```json\s*", "", clean_response)
+                    clean_response = re.sub(r"\s*```$", "", clean_response)
                 
                 try:
-                    agent_response = json.loads(response_text)
+                    agent_response = json.loads(clean_response)
+                    # 如果回傳的是列表，取第一個元素
+                    if isinstance(agent_response, list) and len(agent_response) > 0:
+                        agent_response = agent_response[0]
+                    # 確保它現在是個字典，否則建立空字典
+                    if not isinstance(agent_response, dict):
+                        agent_response = {"message": str(agent_response), "tool_name": None}
                 except json.JSONDecodeError:
                     # Fallback if not JSON
-                    agent_response = {"message": response_text, "tool_name": None}
+                    agent_response = {"message": clean_response, "tool_name": None}
                 
                 thought = agent_response.get("thought", "")
                 tool_name = agent_response.get("tool_name", "")
@@ -426,7 +458,7 @@ while True:
                     oled.draw_screen(current_text=message_text)
                     
                     # 語音合成輸出
-                    if tts and str(message_text).strip():
+                    if not TEXT_ONLY_MODE and tts and str(message_text).strip():
                         try:
                             speak_text = str(message_text).replace("AI", "欸哀")
                             audio = tts.generate(speak_text)
