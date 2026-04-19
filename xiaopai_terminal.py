@@ -7,23 +7,39 @@ import time
 # 設定管道路徑
 PIPE_PATH = "/tmp/xiaopai_input"
 
+import re
+
 def monitor_logs():
     """背景執行緒：監控系統日誌並提取小派的回答"""
-    # 使用 journalctl 監控 xiaopai 服務，只看最新的輸出行
-    cmd = ["journalctl", "-u", "xiaopai", "-n", "0", "-f", "--no-pager"]
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    # 使用 journalctl -a 強制顯示所有文字內容，避免 [blob data]
+    cmd = ["journalctl", "-u", "xiaopai", "-n", "0", "-f", "-a", "--no-pager"]
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
+                               text=True, encoding='utf-8', errors='ignore')
     
+    # 用來移除 ANSI 顏色代碼與 \r\033[K 的正則
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])|\r')
+
     try:
         for line in process.stdout:
-            # 尋找包含「小派: 」或「[系統]」或「[大腦思考]」的行（可根據需要調整）
-            if "小派:" in line:
-                # 提取「小派: 」之後的文字
-                content = line.split("小派:")[1].strip()
-                print(f"\r\033[K\033[1;32m小派：{content}\033[0m") # 綠色輸出
-                print("\n你: ", end="", flush=True)
-            elif "正在呼叫工具" in line:
-                tool = line.split("正在呼叫工具:")[1].strip()
-                print(f"\r\033[K\033[1;33m[系統] 正在呼叫工具: {tool}\033[0m")
+            # 移除日誌頭部與 ANSI 代碼
+            clean_line = ansi_escape.sub('', line).strip()
+            
+            # 尋找小派的正式回覆 (過濾掉「思考中」)
+            if "小派:" in clean_line and "(思考中" not in clean_line:
+                # 提取「小派: 」之後的內容
+                try:
+                    content = clean_line.split("小派:")[1].strip()
+                    if content:
+                        print(f"\r\033[K\033[1;32m小派：{content}\033[0m")
+                        print("\n你: ", end="", flush=True)
+                except IndexError:
+                    pass
+            elif "正在呼叫工具" in clean_line:
+                try:
+                    tool = clean_line.split("正在呼叫工具:")[1].strip()
+                    print(f"\r\033[K\033[1;33m[系統] 正在呼叫工具: {tool}\033[0m")
+                except IndexError:
+                    pass
     finally:
         process.terminate()
 
