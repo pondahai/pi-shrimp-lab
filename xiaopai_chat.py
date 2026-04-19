@@ -141,13 +141,17 @@ def get_system_status():
         return f"讀取系統狀態失敗: {e}"
 
 def execute_shell_command(command):
-    allowlist = ['ls', 'ping', 'df', 'uptime', 'free']
+    allowlist = ['ls', 'ping', 'df', 'uptime', 'free', 'curl']
     cmd_base = command.split()[0] if command else ""
     if cmd_base not in allowlist:
         return f"安全限制：不允許執行指令 '{cmd_base}'，只允許: {', '.join(allowlist)}"
     try:
-        result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=5)
-        return result.stdout.strip()[:500] # 避免輸出過長
+        # 過濾 curl 指令，只允許特定的天氣或 API 查詢，防止隨意下載腳本
+        if cmd_base == 'curl' and 'wttr.in' not in command and 'api' not in command:
+            return "安全限制：curl 只允許用於天氣或 API 查詢。"
+            
+        result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=10)
+        return (result.stdout + result.stderr).strip()[:800]
     except Exception as e:
         return f"指令執行失敗: {e}"
 
@@ -175,9 +179,42 @@ initial_messages = [
 ]
 messages = list(initial_messages)
 
+def normalize_for_tts(text):
+    import re
+    # 1. 移除 Emoji 與特殊符號 (保留基本標點)
+    text = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9，。！？、 ]', '', text)
+    
+    # 2. 數字轉中文 (處理 0-99 的簡單邏輯，適合氣溫、時間)
+    def num_replace(match):
+        num = int(match.group())
+        cn_nums = "零一二三四五六七八九"
+        if num < 10:
+            return cn_nums[num]
+        elif num < 20:
+            return "十" + (cn_nums[num % 10] if num % 10 != 0 else "")
+        elif num < 100:
+            return cn_nums[num // 10] + "十" + (cn_nums[num % 10] if num % 10 != 0 else "")
+        return str(num) # 超過 100 暫不處理
+
+    text = re.sub(r'\d+', num_replace, text)
+    
+    # 3. 英文特定詞彙轉換
+    text = text.replace("AI", "欸哀").replace("CPU", "希披優")
+    
+    return text
+
 # --- 錄音與按鍵邏輯 ---
 is_recording = False
 audio_data = []
+
+def trigger_menu_exit():
+    print("\n[系統] 偵測到長按 4 秒，準備跳回選單...")
+    oled.show_message("正在呼叫選單...")
+    # 停止所有背景活動
+    global is_recording
+    is_recording = False
+    # 這裡使用 os._exit 強制退出，避免被 try-except 攔截
+    os._exit(88) 
 
 def record_audio_callback(indata, frames, time_info, status):
     if is_recording:
@@ -191,7 +228,6 @@ def start_recording():
     is_recording = True
     try:
         if rec_stream is None:
-            # Google VoiceHAT 僅支援 48000Hz 錄音與播放
             rec_stream = sd.InputStream(samplerate=48000, channels=1, callback=record_audio_callback)
             rec_stream.start()
     except Exception as e:
@@ -201,6 +237,7 @@ def start_recording():
 
 def stop_recording():
     global is_recording, audio_data, rec_stream
+    if not is_recording: return None # 如果已經因為長按被關閉則忽略
     is_recording = False
     if rec_stream is not None:
         rec_stream.stop()
@@ -226,6 +263,10 @@ def button_pressed():
 def button_released():
     global btn_press_time
     duration = time.time() - btn_press_time
+    
+    # 如果按住超過 3.5 秒（接近 4 秒），我們就忽略這次的 release 邏輯，交給 when_held 處理
+    if duration > 3.5:
+        return
 
     if TEXT_ONLY_MODE:
         if duration < 0.5:
@@ -236,11 +277,9 @@ def button_released():
     if duration < 0.5:
         input_queue.put(("[CLEAR]", None))
     else:
-        # 錄音取樣率為 48000Hz，判斷長度是否大於 0.5 秒
         if whisper_model and recording is not None and len(recording) > 48000 * 0.5:
             try:
                 sf.write("/tmp/temp_record.wav", recording, 48000)
-                # Whisper 會自動將讀取的音訊重採樣為其需要的 16000Hz
                 segments, _ = whisper_model.transcribe("/tmp/temp_record.wav", language="zh")
                 text = "".join([segment.text for segment in segments])
                 if text.strip():
@@ -251,10 +290,11 @@ def button_released():
                 print("語音處理錯誤:", e)
         else:
             oled.draw_screen()
-            print("你: ", end="", flush=True)
 
 try:
     btn = Button(22, pull_up=True, bounce_time=0.1)
+    btn.hold_time = 4.0
+    btn.when_held = trigger_menu_exit
     btn.when_pressed = button_pressed
     btn.when_released = button_released
 except Exception as e:
@@ -370,27 +410,30 @@ while True:
 
                 res_body = json.loads(raw_response)
                 
-                # Check if there is an error in response
-                has_error = False
-                if isinstance(res_body, list) and len(res_body) > 0 and "error" in res_body[0]:
-                    has_error = True
-                    error_msg = res_body[0]["error"]["message"]
-                    code = res_body[0]["error"]["code"]
-                elif isinstance(res_body, dict) and "error" in res_body:
-                    has_error = True
-                    error_msg = res_body["error"]["message"]
-                    code = res_body["error"]["code"]
-                    
-                if has_error:
-                    print(f"\n[大腦回傳錯誤]: {code} - {error_msg}")
+                # 防禦性檢查
+                if not isinstance(res_body, dict):
+                    print(f"\n[系統] 錯誤: API 回傳並非 JSON 物件。內容: {raw_response}")
                     break
-                
-                # 防禦性檢查：確保回傳內容存在 choices
+
                 if "choices" not in res_body or len(res_body["choices"]) == 0:
-                    print(f"\n[系統] 錯誤: API 回傳內容中找不到 choices。完整內容: {raw_response}")
+                    if "error" in res_body:
+                        print(f"\n[大腦回傳錯誤]: {res_body['error'].get('message', '未知錯誤')}")
+                    else:
+                        print(f"\n[系統] 錯誤: API 回傳內容中找不到 choices。完整內容: {raw_response}")
                     break
                     
-                response_text = res_body["choices"][0]["message"]["content"]
+                choice_msg = res_body["choices"][0].get("message", {})
+                response_text = choice_msg.get("content", "")
+                
+                # 如果 content 為空，檢查是否被安全過濾
+                if not response_text:
+                    finish_reason = res_body["choices"][0].get("finish_reason")
+                    print(f"\n[系統] 警告: 模型未回傳文字 (原因: {finish_reason})")
+                    if finish_reason == "safety":
+                        print("[提示] 回應被安全過濾器攔截。")
+                    else:
+                        print(f"DEBUG 完整回傳: {raw_response}")
+                    break
                 
                 # Filter out <thought>...</thought> tags
                 import re
@@ -454,7 +497,7 @@ while True:
                         
                     print(f"[系統] 工具結果:\n{tool_result}")
                     if tool_name != "capture_and_analyze_vision":
-                        messages.append({"role": "system", "content": f"工具 {tool_name} 的執行結果:\n{tool_result}"})
+                        messages.append({"role": "user", "content": f"工具 {tool_name} 的執行結果:\n{tool_result}"})
                     
                     continue
                 else:
@@ -485,7 +528,8 @@ while True:
                     # 語音合成輸出
                     if not TEXT_ONLY_MODE and tts and str(message_text).strip():
                         try:
-                            speak_text = str(message_text).replace("AI", "欸哀")
+                            speak_text = normalize_for_tts(str(message_text))
+                            print(f"[語音同步] {speak_text}")
                             audio = tts.generate(speak_text)
                             if audio and len(audio.samples) > 0:
                                 sd.default.device = None
