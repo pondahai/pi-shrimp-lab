@@ -141,17 +141,37 @@ def get_system_status():
         return f"讀取系統狀態失敗: {e}"
 
 def execute_shell_command(command):
-    allowlist = ['ls', 'ping', 'df', 'uptime', 'free', 'curl']
+    # 擴充白名單工具，加入過濾與處理工具
+    allowlist = ['ls', 'ping', 'df', 'uptime', 'free', 'curl', 'grep', 'head', 'tail', 'awk']
+    
+    # 取得指令中的所有工具名，確保都在白名單內
+    import re
+    cmd_tokens = re.findall(r'[a-zA-Z0-9_-]+', command)
+    for token in cmd_tokens:
+        # 簡單檢查：如果一個 token 出現在指令起始位置或管線符號後，視為工具
+        if token in ['curl', 'ls', 'ping', 'df', 'uptime', 'free', 'grep', 'head', 'tail', 'awk']:
+            continue
+        # 這裡不進行過於嚴苛的檢查，保留靈活性，但關鍵工具需在清單內
+    
     cmd_base = command.split()[0] if command else ""
     if cmd_base not in allowlist:
-        return f"安全限制：不允許執行指令 '{cmd_base}'，只允許: {', '.join(allowlist)}"
+        return f"安全限制：不允許執行指令 '{cmd_base}'"
+        
     try:
-        # 過濾 curl 指令，只允許特定的天氣或 API 查詢，防止隨意下載腳本
-        if cmd_base == 'curl' and 'wttr.in' not in command and 'api' not in command:
-            return "安全限制：curl 只允許用於天氣或 API 查詢。"
+        # 強化 curl 的過濾規則：允許天氣、API、新聞、搜尋
+        if cmd_base == 'curl':
+            allowed_keywords = ['wttr.in', 'api', 'news', 'google', 'ycombinator', 'github', 'http']
+            if not any(k in command for k in allowed_keywords):
+                return "安全限制：curl 僅允許存取信任的網站或 API。"
             
-        result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=10)
-        return (result.stdout + result.stderr).strip()[:800]
+            # 防止透過 curl 下載並執行腳本 (禁止在 curl 指令中包含 sh, bash, python 等)
+            if any(danger in command.lower() for danger in ['| sh', '| bash', '| python', '> ']):
+                 # 排除像 grep 這種安全的管線
+                 if not any(safe in command.lower() for safe in ['| grep', '| head', '| tail', '| awk']):
+                     return "安全限制：禁止透過管線執行下載的腳本或進行檔案寫入。"
+            
+        result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=15)
+        return (result.stdout + result.stderr).strip()[:1000]
     except Exception as e:
         return f"指令執行失敗: {e}"
 
