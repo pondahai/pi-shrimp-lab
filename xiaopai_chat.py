@@ -343,7 +343,25 @@ def keyboard_thread():
         except EOFError:
             break
 
+def pipe_thread():
+    pipe_path = "/tmp/xiaopai_input"
+    if not os.path.exists(pipe_path):
+        os.mkfifo(pipe_path)
+    
+    while True:
+        try:
+            # 以讀取模式開啟管道，這會阻塞直到有東西寫入
+            with open(pipe_path, "r") as fifo:
+                for line in fifo:
+                    text = line.strip()
+                    if text:
+                        print(f"\n[終端輸入] {text}")
+                        input_queue.put((text, "terminal"))
+        except Exception as e:
+            time.sleep(1)
+
 threading.Thread(target=keyboard_thread, daemon=True).start()
+threading.Thread(target=pipe_thread, daemon=True).start()
 
 print("==================================================")
 print("    🧠 啟動「小派」的大腦 (Gemma + 視覺 + 語音 + OLED)... ")
