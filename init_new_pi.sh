@@ -14,21 +14,23 @@ echo "📦 [1/6] 安裝系統工具與影音依賴..."
 sudo apt update && sudo apt install -y \
     python3-pip python3-venv git ffmpeg portaudio19-dev libportaudio2 \
     libatlas-base-dev i2c-tools fonts-wqy-microhei python3-lgpio \
-    cmake build-essential libcurl4-openssl-dev pkg-config
+    cmake build-essential libcurl4-openssl-dev pkg-config \
+    libjpeg-dev zlib1g-dev libcamera-apps
 
 # 2. 建立專屬虛擬環境
 echo "🐍 [2/6] 建立 Python 虛擬環境 (xiaopai_env)..."
 if [ ! -d "$HOME/xiaopai_env" ]; then
-    python3 -m venv "$HOME/xiaopai_env"
+    # 使用 --system-site-packages 以便存取系統級的 lgpio 驅動
+    python3 -m venv --system-site-packages "$HOME/xiaopai_env"
 fi
 source "$HOME/xiaopai_env/bin/activate"
 
 # 3. 安裝 Python 庫
 echo "📚 [3/6] 安裝小派核心 Python 依賴..."
 pip install --upgrade pip
-# 安裝特定版本的 numpy 避免相容性問題，並安裝 luma.oled 與其他核心庫
+# 安裝 rpi-lgpio 確保在 RPi 5 上 gpiozero 能正常工作
 pip install numpy==1.24.3 faster-whisper sherpa-onnx \
-    sounddevice soundfile luma.oled gpiozero Pillow
+    sounddevice soundfile luma.oled gpiozero Pillow rpi-lgpio
 
 # 4. 下載與編譯本地大腦 (Llama.cpp)
 echo "🧠 [4/6] 下載並編譯 Llama.cpp (本地推理引擎)..."
@@ -50,21 +52,30 @@ mkdir -p "$HOME/xiaopai4/model_files"
 mkdir -p "$HOME/llama.cpp/models"
 
 # 6. 同步啟動腳本與主程式
-echo "📑 [6/6] 同步小派核心程式碼至家目錄..."
-# 假設腳本是在 pi-shrimp-lab 目錄內執行
+echo "📑 [6/6] 同步小派核心程式碼至家目錄並設定自動啟動..."
 if [ -d "$HOME/pi-shrimp-lab" ]; then
     cp "$HOME/pi-shrimp-lab/xiaopai_chat.py" "$HOME/"
     cp "$HOME/pi-shrimp-lab/xiaopai_menu.py" "$HOME/"
     cp "$HOME/pi-shrimp-lab/start_xiaopai.sh" "$HOME/"
     chmod +x "$HOME/start_xiaopai.sh"
+    
+    # 安裝 Systemd 服務
+    echo "⚙️  正在安裝小派自動啟動服務..."
+    sudo cp "$HOME/pi-shrimp-lab/xiaopai.service" /etc/systemd/system/
+    sudo systemctl daemon-reload
+    sudo systemctl enable xiaopai.service
+    echo "✅ 自動啟動服務已安裝並啟用。"
 fi
 
 echo "=================================================="
 echo "✅ 小派環境初始化建置成功！"
 echo ""
-echo "💡 後續步驟："
-echo "1. 請將 GGUF 模型放至: ~/llama.cpp/models/"
-echo "2. 請將語音模型放至: ~/xiaopai4/model_files/"
-echo "3. 請在 ~/pi-shrimp-lab/.env 設定您的 GEMINI_API_KEY"
-echo "4. 重新啟動後執行: bash start_xiaopai.sh"
+echo "💡 服務管理指令："
+echo "   啟動：sudo systemctl start xiaopai"
+echo "   停止：sudo systemctl stop xiaopai"
+echo "   狀態：sudo systemctl status xiaopai"
+echo "   日誌：journalctl -u xiaopai -f"
+echo ""
+echo "💡 提醒："
+echo "   請重新啟動樹莓派，或執行 'sudo systemctl start xiaopai' 來立即開始監聽三連擊！"
 echo "=================================================="

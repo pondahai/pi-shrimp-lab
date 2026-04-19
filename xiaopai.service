@@ -1,0 +1,23 @@
+[Unit]
+Description=Xiaopai AI Agent Service
+After=network.target sound.target
+
+[Service]
+# 設定為 pi 使用者執行
+User=pi
+Group=pi
+WorkingDirectory=/home/pi
+# 執行啟動腳本
+ExecStart=/bin/bash /home/pi/start_xiaopai.sh
+# 設定環境變數
+Environment=PYTHONPATH=/home/pi/pi-shrimp-lab
+Environment=GPIOZERO_PIN_FACTORY=lgpio
+# 如果崩潰，自動重啟
+Restart=always
+RestartSec=5
+# 輸出導向系統日誌
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
