@@ -350,8 +350,9 @@ def pipe_thread():
     
     while True:
         try:
-            # 以 r+ 模式開啟，避免在無寫入者時阻塞
-            with open(pipe_path, "r+") as fifo:
+            # 使用低階 os.open 以讀寫模式開啟管道，防止阻塞
+            fd = os.open(pipe_path, os.O_RDWR)
+            with os.fdopen(fd, 'r') as fifo:
                 while True:
                     line = fifo.readline()
                     if not line:

@@ -68,15 +68,20 @@ def main():
             if user_input.strip():
                 # 採用非阻塞方式寫入管道，避免卡死
                 try:
-                    # 使用 os.O_NONBLOCK 模式開啟
+                    # 使用 os.O_NONBLOCK | os.O_WRONLY
+                    # 在 Linux 下，若另一端沒開讀取，會報 ENXIO (6)
                     fd = os.open(PIPE_PATH, os.O_WRONLY | os.O_NONBLOCK)
                     os.write(fd, (user_input + "\n").encode())
                     os.close(fd)
-                except OSError as e:
-                    if e.errno == 6: # No such device or address (無讀取者)
-                        print("\r\033[K\033[1;31m[系統] 錯誤：小派目前不在對話模式，請先連按三下開啟選單模式並啟動小派。\033[0m")
-                    else:
-                        print(f"\r\033[K發送失敗: {e}")
+                except (OSError, IOError) as e:
+                    # 如果失敗，嘗試以阻塞模式開啟（稍微等一下）
+                    try:
+                        fd = os.open(PIPE_PATH, os.O_WRONLY)
+                        os.write(fd, (user_input + "\n").encode())
+                        os.close(fd)
+                    except Exception as inner_e:
+                        print(f"\r\033[K\033[1;31m[系統] 無法傳送訊息。原因：小派可能還在啟動中或處於選單狀態。\033[0m")
+                        # print(f"DEBUG: {inner_e}") # 除錯用
                 except Exception as e:
                     print(f"\r\033[K發送失敗: {e}")
     except EOFError:
