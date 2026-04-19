@@ -252,6 +252,15 @@ def stop_recording():
 
 input_queue = queue.Queue()
 btn_press_time = 0
+click_times = []
+
+def trigger_menu_exit():
+    print("\n[系統] 偵測到三連擊，準備跳回選單...")
+    oled.show_message("正在呼叫選單...")
+    global is_recording
+    is_recording = False
+    os._exit(88)
+
 def button_pressed():
     global btn_press_time
     btn_press_time = time.time()
@@ -261,11 +270,22 @@ def button_pressed():
         print("\n[系統] 目前為純文字模式，語音錄音已停用。")
 
 def button_released():
-    global btn_press_time
-    duration = time.time() - btn_press_time
+    global btn_press_time, click_times
+    now = time.time()
+    duration = now - btn_press_time
     
-    # 如果按住超過 3.5 秒（接近 4 秒），我們就忽略這次的 release 邏輯，交給 when_held 處理
-    if duration > 3.5:
+    # 紀錄點擊時間點，用於連擊判定
+    click_times.append(now)
+    # 只保留最近 3 次點擊，且必須在 1.2 秒內完成
+    click_times = [t for t in click_times if now - t < 1.2]
+    
+    if len(click_times) >= 3:
+        trigger_menu_exit()
+        return
+
+    # 原有的錄音與清除記憶邏輯
+    if duration > 3.5: # 視為長按結束（錄音已由 start_recording 處理）
+        stop_recording()
         return
 
     if TEXT_ONLY_MODE:
@@ -293,8 +313,7 @@ def button_released():
 
 try:
     btn = Button(22, pull_up=True, bounce_time=0.1)
-    btn.hold_time = 4.0
-    btn.when_held = trigger_menu_exit
+    # 移除 when_held 退出，將其留給語音錄音或未來擴充
     btn.when_pressed = button_pressed
     btn.when_released = button_released
 except Exception as e:

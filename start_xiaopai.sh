@@ -37,23 +37,28 @@ function launch_xiaopai() {
 }
 
 echo "--- 小派守護程序啟動 ---"
-echo "提示：無論何時，長按按鈕 4 秒可呼叫選單"
+echo "提示：無論何時，連續按三下按鈕可呼叫選單"
 
 NEED_MENU=0
 
 while true; do
-    # 如果不需要立即顯示選單，則進入長按偵測模式
+    # 如果不需要立即顯示選單，則進入三連擊偵測模式
     if [ $NEED_MENU -eq 0 ]; then
-        echo "[等待長按 4 秒...]"
+        echo "[等待三連擊呼叫選單...]"
         $PYTHON_EXEC -c "
 import time, sys, os
 from gpiozero import Button
 os.environ['GPIOZERO_PIN_FACTORY'] = 'lgpio'
 btn = Button(22, pull_up=True)
-btn.hold_time = 4.0
-def on_held():
-    os._exit(0) # 成功偵測長按，正常退出
-btn.when_held = on_held
+click_times = []
+def on_pressed():
+    global click_times
+    now = time.time()
+    click_times.append(now)
+    click_times = [t for t in click_times if now - t < 1.0] # 1秒內的三連擊
+    if len(click_times) >= 3:
+        os._exit(0)
+btn.when_pressed = on_pressed
 try:
     while True: time.sleep(1)
 except KeyboardInterrupt:
