@@ -350,9 +350,13 @@ def pipe_thread():
     
     while True:
         try:
-            # 以讀取模式開啟管道，這會阻塞直到有東西寫入
-            with open(pipe_path, "r") as fifo:
-                for line in fifo:
+            # 以 r+ 模式開啟，避免在無寫入者時阻塞
+            with open(pipe_path, "r+") as fifo:
+                while True:
+                    line = fifo.readline()
+                    if not line:
+                        time.sleep(0.1)
+                        continue
                     text = line.strip()
                     if text:
                         print(f"\n[終端輸入] {text}")

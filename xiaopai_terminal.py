@@ -66,12 +66,19 @@ def main():
                 break
             
             if user_input.strip():
-                # 寫入管道
+                # 採用非阻塞方式寫入管道，避免卡死
                 try:
-                    with open(PIPE_PATH, "w") as fifo:
-                        fifo.write(user_input + "\n")
+                    # 使用 os.O_NONBLOCK 模式開啟
+                    fd = os.open(PIPE_PATH, os.O_WRONLY | os.O_NONBLOCK)
+                    os.write(fd, (user_input + "\n").encode())
+                    os.close(fd)
+                except OSError as e:
+                    if e.errno == 6: # No such device or address (無讀取者)
+                        print("\r\033[K\033[1;31m[系統] 錯誤：小派目前不在對話模式，請先連按三下開啟選單模式並啟動小派。\033[0m")
+                    else:
+                        print(f"\r\033[K發送失敗: {e}")
                 except Exception as e:
-                    print(f"發送失敗: {e}")
+                    print(f"\r\033[K發送失敗: {e}")
     except EOFError:
         pass
     except KeyboardInterrupt:
