@@ -67,53 +67,93 @@ class OledDisplay:
         self.line_height = 14
         self.max_lines = self.height // self.line_height
         self.history = []
+        self.scroll_thread = None
+        self.scroll_stop_event = threading.Event()
+        self.lock = threading.Lock()
+
+    def _wrap_text(self, text, draw):
+        display_lines = []
+        for raw_line in text.split('\n'):
+            current_line = ""
+            for char in raw_line:
+                test_line = current_line + char
+                bbox = draw.textbbox((0, 0), test_line, font=self.font)
+                if bbox[2] - bbox[0] > self.width:
+                    display_lines.append(current_line)
+                    current_line = char
+                else:
+                    current_line = test_line
+            if current_line:
+                display_lines.append(current_line)
+        return display_lines
+
+    def _render_lines(self, lines, center_single=False):
+        with self.lock:
+            image = Image.new("1", (self.width, self.height))
+            draw = ImageDraw.Draw(image)
+            y = 0
+            if center_single and len(lines) == 1:
+                bbox = draw.textbbox((0, 0), lines[0], font=self.font)
+                text_w = bbox[2] - bbox[0]
+                text_h = bbox[3] - bbox[1]
+                x = max(0, (self.width - text_w) // 2)
+                y = max(0, (self.height - text_h) // 2)
+                draw.text((x, y), lines[0], font=self.font, fill=255)
+            else:
+                for line in lines[:self.max_lines]:
+                    draw.text((0, y), line, font=self.font, fill=255)
+                    y += self.line_height
+            self.device.display(image)
+
+    def _scroll_task(self, lines):
+        if self.scroll_stop_event.wait(1.5): return
+        
+        for i in range(1, len(lines) - self.max_lines + 1):
+            if self.scroll_stop_event.is_set(): return
+            self._render_lines(lines[i : i + self.max_lines])
+            if self.scroll_stop_event.wait(0.8): return
+
+    def _stop_scroll(self):
+        if self.scroll_thread and self.scroll_thread.is_alive():
+            self.scroll_stop_event.set()
+            self.scroll_thread.join()
+        self.scroll_stop_event.clear()
 
     def draw_screen(self, current_text=""):
-        image = Image.new("1", (self.width, self.height))
-        draw = ImageDraw.Draw(image)
+        self._stop_scroll()
+        
+        temp_img = Image.new("1", (self.width, self.height))
+        draw = ImageDraw.Draw(temp_img)
         
         display_lines = []
         for role, msg in self.history[-1:]:
             prefix = "你: " if role == "user" else "小派: "
-            full_msg = prefix + msg
-            current_line = ""
-            for char in full_msg:
-                test_line = current_line + char
-                bbox = draw.textbbox((0, 0), test_line, font=self.font)
-                if bbox[2] - bbox[0] > self.width:
-                    display_lines.append(current_line)
-                    current_line = char
-                else:
-                    current_line = test_line
-            if current_line:
-                display_lines.append(current_line)
+            display_lines.extend(self._wrap_text(prefix + msg, draw))
                 
         if current_text:
-            full_msg = "小派: " + current_text
-            current_line = ""
-            for char in full_msg:
-                test_line = current_line + char
-                bbox = draw.textbbox((0, 0), test_line, font=self.font)
-                if bbox[2] - bbox[0] > self.width:
-                    display_lines.append(current_line)
-                    current_line = char
-                else:
-                    current_line = test_line
-            if current_line:
-                display_lines.append(current_line)
+            display_lines.extend(self._wrap_text("小派: " + current_text, draw))
 
-        display_lines = display_lines[-self.max_lines:]
-        y = 0
-        for line in display_lines:
-            draw.text((0, y), line, font=self.font, fill=255)
-            y += self.line_height
-        self.device.display(image)
+        if len(display_lines) > self.max_lines:
+            self._render_lines(display_lines)
+            self.scroll_thread = threading.Thread(target=self._scroll_task, args=(display_lines,))
+            self.scroll_thread.daemon = True
+            self.scroll_thread.start()
+        else:
+            self._render_lines(display_lines)
 
     def show_message(self, text):
-        image = Image.new("1", (self.width, self.height))
-        draw = ImageDraw.Draw(image)
-        draw.text((10, 25), text, font=self.font, fill=255)
-        self.device.display(image)
+        self._stop_scroll()
+        temp_img = Image.new("1", (self.width, self.height))
+        draw = ImageDraw.Draw(temp_img)
+        display_lines = self._wrap_text(text, draw)
+        
+        if len(display_lines) > self.max_lines:
+            self._render_lines(display_lines)
+            self.scroll_thread = threading.Thread(target=self._scroll_task, args=(display_lines,))
+            self.scroll_thread.daemon = True
+            self.scroll_thread.start()
+        else:
+            self._render_lines(display_lines, center_single=True)
 
 print("正在喚醒小派的 OLED 螢幕與 GPIO...")
 try:
@@ -301,11 +341,6 @@ def button_released():
     
     if len(click_times) >= 3:
         trigger_menu_exit()
-        return
-
-    # 原有的錄音與清除記憶邏輯
-    if duration > 3.5: # 視為長按結束（錄音已由 start_recording 處理）
-        stop_recording()
         return
 
     if TEXT_ONLY_MODE:
