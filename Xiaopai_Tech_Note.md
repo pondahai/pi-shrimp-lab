@@ -5,7 +5,7 @@
 *   **交互選單 (New)**：`xiaopai_menu.py` 透過 OLED 與實體按鍵提供啟動選項。支援單擊切換、雙擊確認、**三連擊全域呼叫選單**。
 *   **大腦引擎**：
     *   **雲端 (優先)**：Google Gemini API (Gemma-4-31B-it)。透過 OpenAI 兼容端點 (`v1beta/openai`) 連接。
-    *   **本地 (降級備援)**：`llama-server` 執行 `gemma-4-E2B-it-UD-IQ2_M.gguf`。
+    *   **本地 (降級備援)**：`llama-server` 執行 `gemma-4-E2B-it-Q4_K_M.gguf`。
 
 ## 2. 關鍵技術實作細節
 *   **三連擊監聽 (Triple-Click Detection)**：

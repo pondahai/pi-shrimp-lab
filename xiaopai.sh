@@ -1,6 +1,6 @@
 #!/bin/bash
 
-MODEL="$HOME/llama.cpp/models/gemma-4-E2B-it-UD-IQ2_M.gguf"
+MODEL="$HOME/llama.cpp/models/gemma-4-E2B-it-Q4_K_M.gguf"
 CLI="$HOME/llama.cpp/build/bin/llama-cli"
 
 echo "=================================================="

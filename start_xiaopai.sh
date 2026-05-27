@@ -25,7 +25,7 @@ function launch_xiaopai() {
 
     if [ "$USE_CLOUD_LLM" == "0" ]; then
         pkill -f llama-server
-        nohup $HOME_DIR/llama.cpp/build/bin/llama-server -m $HOME_DIR/llama.cpp/models/gemma-4-E2B-it-UD-IQ2_M.gguf --mmproj $HOME_DIR/llama.cpp/models/mmproj-F16.gguf -c 2048 --port 8080 --reasoning off --reasoning-format none > $HOME_DIR/llama_server.log 2>&1 &
+        nohup $HOME_DIR/llama.cpp/build/bin/llama-server -m $HOME_DIR/llama.cpp/models/gemma-4-E2B-it-Q4_K_M.gguf --mmproj $HOME_DIR/llama.cpp/models/mmproj-F16.gguf -c 2048 --port 8080 --reasoning off --reasoning-format none > $HOME_DIR/llama_server.log 2>&1 &
         sleep 25
     fi
 
