@@ -485,6 +485,8 @@ while True:
                 payload["model"] = "models/gemma-4-31b-it"
             else:
                 api_url = "http://127.0.0.1:8080/v1/chat/completions"
+                payload["chat_template_kwargs"] = {"enable_thinking": False}
+                payload["enable_thinking"] = False
             
             print("小派: (思考中...)", end="", flush=True)
             oled.draw_screen(current_text="(思考中...)")
