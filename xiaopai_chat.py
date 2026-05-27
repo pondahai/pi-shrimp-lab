@@ -67,15 +67,17 @@ class OledDisplay:
         self.line_height = 14
         self.max_lines = self.height // self.line_height
         self.history = []
-        self.scroll_thread = None
-        self.scroll_stop_event = threading.Event()
-        self.lock = threading.Lock()
 
-    def _wrap_text(self, text, draw):
+    def draw_screen(self, current_text=""):
+        image = Image.new("1", (self.width, self.height))
+        draw = ImageDraw.Draw(image)
+        
         display_lines = []
-        for raw_line in text.split('\n'):
+        for role, msg in self.history[-1:]:
+            prefix = "你: " if role == "user" else "小派: "
+            full_msg = prefix + msg
             current_line = ""
-            for char in raw_line:
+            for char in full_msg:
                 test_line = current_line + char
                 bbox = draw.textbbox((0, 0), test_line, font=self.font)
                 if bbox[2] - bbox[0] > self.width:
@@ -85,75 +87,33 @@ class OledDisplay:
                     current_line = test_line
             if current_line:
                 display_lines.append(current_line)
-        return display_lines
-
-    def _render_lines(self, lines, center_single=False):
-        with self.lock:
-            image = Image.new("1", (self.width, self.height))
-            draw = ImageDraw.Draw(image)
-            y = 0
-            if center_single and len(lines) == 1:
-                bbox = draw.textbbox((0, 0), lines[0], font=self.font)
-                text_w = bbox[2] - bbox[0]
-                text_h = bbox[3] - bbox[1]
-                x = max(0, (self.width - text_w) // 2)
-                y = max(0, (self.height - text_h) // 2)
-                draw.text((x, y), lines[0], font=self.font, fill=255)
-            else:
-                for line in lines[:self.max_lines]:
-                    draw.text((0, y), line, font=self.font, fill=255)
-                    y += self.line_height
-            self.device.display(image)
-
-    def _scroll_task(self, lines):
-        if self.scroll_stop_event.wait(1.5): return
-        
-        for i in range(1, len(lines) - self.max_lines + 1):
-            if self.scroll_stop_event.is_set(): return
-            self._render_lines(lines[i : i + self.max_lines])
-            if self.scroll_stop_event.wait(0.8): return
-
-    def _stop_scroll(self):
-        if self.scroll_thread and self.scroll_thread.is_alive():
-            self.scroll_stop_event.set()
-            self.scroll_thread.join()
-        self.scroll_stop_event.clear()
-
-    def draw_screen(self, current_text=""):
-        self._stop_scroll()
-        
-        temp_img = Image.new("1", (self.width, self.height))
-        draw = ImageDraw.Draw(temp_img)
-        
-        display_lines = []
-        for role, msg in self.history[-1:]:
-            prefix = "你: " if role == "user" else "小派: "
-            display_lines.extend(self._wrap_text(prefix + msg, draw))
                 
         if current_text:
-            display_lines.extend(self._wrap_text("小派: " + current_text, draw))
+            full_msg = "小派: " + current_text
+            current_line = ""
+            for char in full_msg:
+                test_line = current_line + char
+                bbox = draw.textbbox((0, 0), test_line, font=self.font)
+                if bbox[2] - bbox[0] > self.width:
+                    display_lines.append(current_line)
+                    current_line = char
+                else:
+                    current_line = test_line
+            if current_line:
+                display_lines.append(current_line)
 
-        if len(display_lines) > self.max_lines:
-            self._render_lines(display_lines)
-            self.scroll_thread = threading.Thread(target=self._scroll_task, args=(display_lines,))
-            self.scroll_thread.daemon = True
-            self.scroll_thread.start()
-        else:
-            self._render_lines(display_lines)
+        display_lines = display_lines[-self.max_lines:]
+        y = 0
+        for line in display_lines:
+            draw.text((0, y), line, font=self.font, fill=255)
+            y += self.line_height
+        self.device.display(image)
 
     def show_message(self, text):
-        self._stop_scroll()
-        temp_img = Image.new("1", (self.width, self.height))
-        draw = ImageDraw.Draw(temp_img)
-        display_lines = self._wrap_text(text, draw)
-        
-        if len(display_lines) > self.max_lines:
-            self._render_lines(display_lines)
-            self.scroll_thread = threading.Thread(target=self._scroll_task, args=(display_lines,))
-            self.scroll_thread.daemon = True
-            self.scroll_thread.start()
-        else:
-            self._render_lines(display_lines, center_single=True)
+        image = Image.new("1", (self.width, self.height))
+        draw = ImageDraw.Draw(image)
+        draw.text((10, 25), text, font=self.font, fill=255)
+        self.device.display(image)
 
 print("正在喚醒小派的 OLED 螢幕與 GPIO...")
 try:
@@ -214,6 +174,48 @@ def execute_shell_command(command):
         return (result.stdout + result.stderr).strip()[:1000]
     except Exception as e:
         return f"指令執行失敗: {e}"
+
+
+tools_schema = [
+    {
+        "type": "function",
+        "function": {
+            "name": "capture_and_analyze_vision",
+            "description": "拍照並觀看眼前畫面，當用戶詢問'看'、'看到什麼'或'拍照'時，請調用此工具拍照後進行分析。"
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_time",
+            "description": "獲取現在時間"
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_system_status",
+            "description": "獲取 CPU 溫度與記憶體狀態"
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "execute_shell_command",
+            "description": "執行終端機安全指令",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "指令字串"
+                    }
+                },
+                "required": ["command"]
+            }
+        }
+    }
+]
 
 SYSTEM_PROMPT = """你是「小派」，一個運行在樹莓派 5 上的 AI 代理。你可以思考、操作工具並與人溫暖地對話。
 
@@ -343,6 +345,11 @@ def button_released():
         trigger_menu_exit()
         return
 
+    # 原有的錄音與清除記憶邏輯
+    if duration > 3.5: # 視為長按結束（錄音已由 start_recording 處理）
+        stop_recording()
+        return
+
     if TEXT_ONLY_MODE:
         if duration < 0.5:
             input_queue.put(("[CLEAR]", None))
@@ -452,9 +459,9 @@ while True:
         if input_type == "voice":
             print(f"你 (語音): {user_input}")
             
-        messages.append({"role": "user", "content": user_input})
-        oled.history.append(("user", user_input))
-        oled.draw_screen()
+            messages.append({"role": "user", "content": user_input})
+            oled.history.append(("user", user_input))
+            oled.draw_screen()
         
         # Agent Loop
         agent_loop_count = 0
@@ -465,7 +472,8 @@ while True:
                 "messages": messages,
                 "stream": False,
                 "temperature": 0.6,
-                "max_tokens": 1024
+                "max_tokens": 1024,
+                "tools": tools_schema
             }
             
             headers = {"Content-Type": "application/json"}
@@ -520,17 +528,101 @@ while True:
                     break
                     
                 choice_msg = res_body["choices"][0].get("message", {})
-                response_text = choice_msg.get("content", "")
+                response_text = choice_msg.get("content", "") or ""
+                tool_calls = choice_msg.get("tool_calls", None)
                 
-                # 如果 content 為空，檢查是否被安全過濾
-                if not response_text:
+                # 如果既沒有文字回傳，也沒有工具呼叫，檢查是否被安全過濾
+                if not response_text and not tool_calls:
                     finish_reason = res_body["choices"][0].get("finish_reason")
-                    print(f"\n[系統] 警告: 模型未回傳文字 (原因: {finish_reason})")
+                    print(f"\n[系統] 警告: 模型未回傳文字與工具 (原因: {finish_reason})")
                     if finish_reason == "safety":
                         print("[提示] 回應被安全過濾器攔截。")
                     else:
                         print(f"DEBUG 完整回傳: {raw_response}")
                     break
+                
+                # 優先處理 Gemma 4 原生工具呼叫 (Native Tool Calling)
+                if tool_calls:
+                    messages.append(choice_msg) # 紀錄 Assistant 的工具呼叫意圖
+                    
+                    for tool_call in tool_calls:
+                        tool_name = tool_call["function"]["name"]
+                        tool_args_str = tool_call["function"].get("arguments", "{}")
+                        try:
+                            tool_args = json.loads(tool_args_str)
+                        except:
+                            tool_args = tool_args_str
+                            
+                        if isinstance(tool_args, dict) and "command" in tool_args:
+                            tool_args_val = tool_args["command"]
+                        else:
+                            tool_args_val = tool_args
+                            
+                        print(f"\n[系統] 偵測到 Gemma 4 原生工具呼叫: {tool_name}({tool_args_val})")
+                        oled.draw_screen(current_text=f"原生呼叫 {tool_name}...")
+                        
+                        tool_result = ""
+                        if tool_name == "get_current_time":
+                            tool_result = get_current_time()
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call["id"],
+                                "name": tool_name,
+                                "content": tool_result
+                            })
+                        elif tool_name == "get_system_status":
+                            tool_result = get_system_status()
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call["id"],
+                                "name": tool_name,
+                                "content": tool_result
+                            })
+                        elif tool_name == "capture_and_analyze_vision":
+                            base64_img = capture_image_base64()
+                            if base64_img:
+                                tool_result = "已成功拍照並附加照片在下一則訊息中。"
+                                messages.append({
+                                    "role": "tool",
+                                    "tool_call_id": tool_call["id"],
+                                    "name": tool_name,
+                                    "content": tool_result
+                                })
+                                # 影像資料最相容的塞法是放在下一則 user role 訊息中傳入大腦
+                                messages.append({
+                                    "role": "user",
+                                    "content": [
+                                        {"type": "text", "text": "這是你剛才呼叫 capture_and_analyze_vision 拍下的相片，請對這張相片進行分析與回答。"},
+                                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_img}"}}
+                                    ]
+                                })
+                            else:
+                                tool_result = "拍照失敗。"
+                                messages.append({
+                                    "role": "tool",
+                                    "tool_call_id": tool_call["id"],
+                                    "name": tool_name,
+                                    "content": tool_result
+                                })
+                        elif tool_name == "execute_shell_command":
+                            tool_result = execute_shell_command(tool_args_val)
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call["id"],
+                                "name": tool_name,
+                                "content": tool_result
+                            })
+                        else:
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call["id"],
+                                "name": tool_name,
+                                "content": f"找不到工具: {tool_name}"
+                            })
+                            
+                        print(f"[系統] 原生工具結果已回傳")
+                        
+                    continue
                 
                 # Filter out <thought>...</thought> tags
                 import re
